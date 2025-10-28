@@ -1,0 +1,67 @@
+trigger:
+  - main
+  - develop
+
+pool:
+  vmImage: 'ubuntu-latest'
+
+variables:
+  - group: sonarqube-vars  # Create this variable group in Azure DevOps with SONAR_TOKEN
+
+stages:
+  - stage: Build_and_Test
+    displayName: 'Build and Test'
+    jobs:
+      - job: Test
+        displayName: 'Run Tests and SonarQube Analysis'
+        steps:
+          - task: NodeTool@0
+            inputs:
+              versionSpec: '18.x'
+            displayName: 'Install Node.js'
+
+          - script: |
+              npm install
+            displayName: 'Install Dependencies'
+
+          - script: |
+              npm run test:coverage
+            displayName: 'Run Tests with Coverage'
+
+          - task: PublishTestResults@2
+            inputs:
+              testResultsFormat: 'JUnit'
+              testResultsFiles: '**/junit.xml'
+              failTaskOnFailedTests: true
+            displayName: 'Publish Test Results'
+            condition: succeededOrFailed()
+
+          - task: PublishCodeCoverageResults@1
+            inputs:
+              codeCoverageTool: 'Cobertura'
+              summaryFileLocation: '$(System.DefaultWorkingDirectory)/coverage/cobertura-coverage.xml'
+              reportDirectory: '$(System.DefaultWorkingDirectory)/coverage'
+            displayName: 'Publish Code Coverage'
+            condition: succeededOrFailed()
+
+          - task: SonarQubePrepare@5
+            inputs:
+              SonarQube: 'SonarQube-Connection'  # Name of your SonarQube service connection
+              scannerMode: 'CLI'
+              configMode: 'file'
+              configFile: 'sonar-project.properties'
+              extraProperties: |
+                sonar.javascript.lcov.reportPaths=coverage/lcov.info
+            displayName: 'Prepare SonarQube Analysis'
+
+          - task: SonarQubeAnalyze@5
+            displayName: 'Run SonarQube Analysis'
+
+          - task: SonarQubePublish@5
+            inputs:
+              pollingTimeoutSec: '300'
+            displayName: 'Publish SonarQube Quality Gate Result'
+
+          - script: |
+              echo "Checking SonarQube Quality Gate Status..."
+            displayName: 'Quality Gate Check'
