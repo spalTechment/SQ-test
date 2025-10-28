@@ -1,0 +1,100 @@
+# Node.js + React CI with SonarQube, artifacts, and optional deploy
+
+trigger:
+- main
+
+pool:
+  vmImage: 'ubuntu-latest'
+
+steps:
+# Use Node 20
+- task: NodeTool@0
+  displayName: "Use Node.js 20.x"
+  inputs:
+    versionSpec: '20.x'
+
+# Cache node_modules to speed up builds
+- task: Cache@2
+  displayName: "Cache npm"
+  inputs:
+    key: 'npm | "$(Agent.OS)" | package-lock.json'
+    restoreKeys: |
+      npm | "$(Agent.OS)"
+    path: $(Pipeline.Workspace)/.npm
+
+# Configure npm cache path (uses the folder above)
+- script: |
+    npm config set cache $(Pipeline.Workspace)/.npm --global
+  displayName: "Point npm to pipeline cache"
+
+# --- SonarQube Prepare (requires a service connection named 'SQ-test') ---
+- task: SonarQubePrepare@7
+  displayName: "Prepare SonarQube Analysis"
+  inputs:
+    SonarQube: 'SQ-test'        # Service connection name in Project Settings > Service connections
+    scannerMode: 'cli'
+    configMode: 'file'           # Uses sonar-project.properties at repo root
+
+# Install dependencies
+- script: |
+    npm ci
+  displayName: "Install dependencies (npm ci)"
+
+# Run tests (optional — add reporters if you want to publish results)
+- script: |
+    npm test --if-present -- --watchAll=false
+  displayName: "Run tests"
+  continueOnError: true
+
+# Build the React app
+- script: |
+    npm run build
+  displayName: "Build"
+
+# --- SonarQube Analysis & Quality Gate publish ---
+- task: SonarQubeAnalyze@7
+  displayName: "Run SonarQube Analysis"
+
+- task: SonarQubePublish@7
+  displayName: "Publish SonarQube Quality Gate Result"
+  inputs:
+    pollingTimeoutSec: '300'
+
+# Publish the React build output as a pipeline artifact
+# For CRA/Vite, the static output is typically in 'build' or 'dist'.
+- task: PublishBuildArtifacts@1
+  displayName: "Publish build artifacts"
+  inputs:
+    PathtoPublish: 'build'       # change to 'dist' if your tool outputs there
+    ArtifactName: 'react-build'
+    publishLocation: 'Container'
+
+# -------------------- OPTIONAL: Deploy to Azure Web App --------------------
+# Requires an Azure Resource Manager service connection and a Linux Web App
+# Uncomment and set your values to enable
+#
+# - task: AzureWebApp@1
+#   displayName: "Deploy to Azure Web App"
+#   inputs:
+#     azureSubscription: '<Your-Azure-Service-Connection>'
+#     appName: '<your-web-app-name>'
+#     package: '$(Pipeline.Workspace)/react-build/*.zip'
+#     # If deploying static files, you may prefer to zip first:
+#     # preDeploymentApprovals: 'true'
+#
+# To zip the artifact before deploy, add:
+# - task: ArchiveFiles@2
+#   displayName: "Zip build output"
+#   inputs:
+#     rootFolderOrFile: 'build'
+#     includeRootFolder: false
+#     archiveType: 'zip'
+#     archiveFile: '$(Build.ArtifactStagingDirectory)/react-build.zip'
+#     replaceExistingArchive: true
+#
+# - task: PublishBuildArtifacts@1
+#   displayName: "Publish zipped artifact"
+#   inputs:
+#     PathtoPublish: '$(Build.ArtifactStagingDirectory)/react-build.zip'
+#     ArtifactName: 'react-build-zip'
+#     publishLocation: 'Container'
